@@ -1,6 +1,8 @@
 # OpenCode ↔ Fluent integration hardening
 
-**Status**: Proposed, 2026-11-07. Not implemented. Derived from a full session
+**Status**: Implemented, 2026-11-09. WP1, WP2, and WP4–WP8 landed; v0.8.0
+already provides WP3's concurrent-landing tolerance. WP7 uses the clean-tree
+alternative instead of a working-tree snapshot. Derived from a full session
 using Fluent 0.6.0 (modified) with OpenCode on a monorepo: eight Work Items
 planned and executed, several of which failed in recoverable but costly ways.
 
