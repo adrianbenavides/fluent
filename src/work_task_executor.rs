@@ -2033,6 +2033,9 @@ fn run_review_task_with_coder(
                 &pair.model,
                 pair.effort.as_deref(),
             ),
+            CoderKind::Opencode => Err(anyhow::anyhow!(
+                "OpenCode does not support native Reviewer execution"
+            )),
         };
         if let Err(error) = capability {
             mark_task_failed_attempt_needs_user(
@@ -5706,9 +5709,9 @@ fn run_task_coder_with_coder_with_feedback(
     } else {
         false
     };
-    let mut selected_claude_home = claude_home.map(Path::to_path_buf);
+    let mut selected_claude_home = managed_home.map(Path::to_path_buf);
     if coder_kind == CoderKind::Claude
-        && let (Some(home), crate::coder::CoderSession::Resume(id)) = (claude_home, session)
+        && let (Some(home), crate::coder::CoderSession::Resume(id)) = (managed_home, session)
         && crate::claude_session::stored_session(home, id)
             .context(crate::claude_session::FallbackStopped)?
             == crate::claude_session::StoredSession::Missing
@@ -8388,6 +8391,9 @@ fn run_learner_with_coder_with_provider_readiness(
                     private_root: Some(inputs.handoff_dir),
                     launch_env: &extra_env,
                 })?
+            }
+            CoderKind::Opencode => {
+                anyhow::bail!("OpenCode does not support native Learner execution")
             }
         }
         0
