@@ -1453,7 +1453,8 @@ fn cmd_attempt(
             }
 
             if guidance::guidance_enabled() {
-                eprintln!("{}", guidance::format_coder_plan(&coder_mapping));
+                let sources = fluent::config::coder_mapping_sources(project_root, &coder_mapping)?;
+                eprintln!("{}", guidance::format_coder_plan(&coder_mapping, &sources));
             }
 
             if tester_no_sandbox {
@@ -2207,13 +2208,17 @@ fn cmd_review(
             let resolver = ContentResolver::new(Some(project_root));
             fluent::tester::check_structural(project_root, false, &resolver)
                 .context("Tester is not ready; review state was not created")?;
+            let coder_mapping = work_model::resolve_coder_mapping(
+                &fluent::config::attempt_creation_inputs(project_root)?,
+            )?;
             let attempt_id = attempt_id.unwrap_or_else(|| item.next_attempt_id());
-            let task_ids = item.add_review_only_attempt(
+            let task_ids = item.add_review_only_attempt_with_coder_mapping(
                 attempt_id.clone(),
                 review::REVIEWERS,
                 source_ref,
                 source_commit,
                 from_working_tree,
+                coder_mapping,
             )?;
             store.write_work_item(&item)?;
             let variant = if from_working_tree {
