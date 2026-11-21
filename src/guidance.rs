@@ -180,7 +180,8 @@ pub fn after_work_item_list() -> &'static str {
 }
 
 pub fn after_cleanup() -> &'static str {
-    "\n→ Next: fluent status to see remaining work"
+    "\n→ Next: fluent status to see remaining work\n  \
+     (a finished Work Item is pruned only after `fluent work-item abandon <id>`; cleanup never guesses)"
 }
 
 pub fn after_observation_create() -> &'static str {
