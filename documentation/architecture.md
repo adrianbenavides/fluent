@@ -1053,9 +1053,10 @@ the required evidence. Fluent records both artifacts before
 completing a passing Review Task. A `fail` or `uncertain` report still completes
 with `review.md` alone
 because verdict acceptance belongs to later review or merge policy.
-`fluent review codebase <work-item-id> <attempt-id>` appends a
+`fluent review codebase <work-item-id> [attempt-id]` appends a
 review-only Attempt for full-codebase review of the current source
-checkout. Review-only Attempts contain review Tasks only, read the source
+checkout. When `<attempt-id>` is omitted the next free id is assigned, as
+`fluent attempt create` does. Review-only Attempts contain review Tasks only, read the source
 checkout through workspace id `source` at path `.`, and write artifacts
 under `.fluent/work/artifacts/<work-item-id>/<attempt-id>/<task-id>/`.
 The review Task executor

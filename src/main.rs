@@ -2207,6 +2207,7 @@ fn cmd_review(
             let resolver = ContentResolver::new(Some(project_root));
             fluent::tester::check_structural(project_root, false, &resolver)
                 .context("Tester is not ready; review state was not created")?;
+            let attempt_id = attempt_id.unwrap_or_else(|| item.next_attempt_id());
             let task_ids = item.add_review_only_attempt(
                 attempt_id.clone(),
                 review::REVIEWERS,

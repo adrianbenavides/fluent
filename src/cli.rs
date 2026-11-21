@@ -1218,8 +1218,8 @@ pub enum ReviewCommands {
         /// Work Item ID
         work_item_id: String,
 
-        /// Attempt ID
-        attempt_id: String,
+        /// Attempt ID (auto-assigned when omitted)
+        attempt_id: Option<String>,
 
         /// Review the current working tree at `.` (with the source-checkout
         /// restorative guard) instead of the per-branch review-only worktree.
