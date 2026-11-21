@@ -81,6 +81,7 @@ fn sync(project_root: &Path, worktree_path: &Path, target_commit: &str) -> Resul
             worktree_path.display()
         );
     }
+    ensure_worktree_belongs_to_project(project_root, worktree_path)?;
     if is_dirty(worktree_path)? {
         git::run(
             worktree_path,
@@ -107,7 +108,65 @@ fn sync(project_root: &Path, worktree_path: &Path, target_commit: &str) -> Resul
         &["reset", "--hard", target_commit],
         "reset review-only worktree to target commit",
     )?;
-    let _ = project_root;
+    Ok(())
+}
+
+/// Shared git directory of the repository that owns `path`.
+fn git_common_dir(path: &Path) -> Result<PathBuf> {
+    let raw = git::run_stdout(
+        path,
+        &["rev-parse", "--git-common-dir"],
+        "read git common dir",
+    )?;
+    let trimmed = raw.trim();
+    anyhow::ensure!(
+        !trimmed.is_empty(),
+        "git rev-parse --git-common-dir returned nothing for {}",
+        path.display()
+    );
+    let dir = Path::new(trimmed);
+    let absolute = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        path.join(dir)
+    };
+    absolute.canonicalize().with_context(|| {
+        format!(
+            "resolve git common dir {} for {}",
+            absolute.display(),
+            path.display()
+        )
+    })
+}
+
+/// Refuse to touch a sibling worktree that belongs to another repository.
+///
+/// The review-only worktree path is derived from the branch name alone
+/// (`../work-review-<branch>`), so two repositories sitting on the same branch
+/// in the same parent directory resolve to the same path. Without this guard,
+/// `sync` runs `reset --hard` and `checkout --detach` inside a repository the
+/// Attempt does not own. The failure then surfaces as a confusing git error, or
+/// not at all when the target commit happens to resolve there.
+fn ensure_worktree_belongs_to_project(project_root: &Path, worktree_path: &Path) -> Result<()> {
+    let project_git_dir = git_common_dir(project_root)?;
+    let worktree_git_dir = git_common_dir(worktree_path).with_context(|| {
+        format!(
+            "review-only worktree path {} exists but is not a usable git worktree; \
+             remove it manually before re-running",
+            worktree_path.display()
+        )
+    })?;
+    if project_git_dir != worktree_git_dir {
+        bail!(
+            "review-only worktree path {} belongs to another repository (git dir {}), \
+             not to this project ({}). The path is derived from the branch name only, \
+             so two repositories on the same branch collide. Remove or rename the other \
+             worktree, or review from a different directory.",
+            worktree_path.display(),
+            worktree_git_dir.display(),
+            project_git_dir.display()
+        );
+    }
     Ok(())
 }
 
@@ -372,6 +431,89 @@ fn is_dirty(worktree_path: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    /// Minimal repository with one commit on `main`.
+    fn init_repo(root: &Path) {
+        fs::create_dir_all(root).unwrap();
+        let git_run = |args: &[&str]| {
+            git::run(root, args, "review-only worktree test fixture").unwrap();
+        };
+        git_run(&["init", "-q", "-b", "main"]);
+        git_run(&["config", "user.email", "test@example.com"]);
+        git_run(&["config", "user.name", "test"]);
+        fs::write(root.join("file.txt"), "base").unwrap();
+        git_run(&["add", "file.txt"]);
+        git_run(&["commit", "-q", "-m", "base"]);
+    }
+
+    fn head_of(root: &Path) -> String {
+        git::run_stdout(root, &["rev-parse", "HEAD"], "read HEAD").unwrap()
+    }
+
+    #[test]
+    fn sync_refuses_a_worktree_owned_by_another_repository() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let other = tmp.path().join("other");
+        init_repo(&project);
+        init_repo(&other);
+
+        // Another repository already occupies the sibling path this project's
+        // branch would map to: two repos on `main` in one parent directory.
+        let foreign = tmp.path().join("work-review-main");
+        git::run(
+            &other,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                foreign.to_str().unwrap(),
+                "main",
+            ],
+            "create foreign worktree",
+        )
+        .unwrap();
+        let foreign_head_before = head_of(&foreign);
+
+        let project_head = head_of(&project);
+        let error = ensure(&project, "main", project_head.trim()).unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("belongs to another repository"),
+            "expected an ownership error, got: {message}"
+        );
+
+        // The foreign worktree must be left exactly as it was found.
+        assert_eq!(
+            head_of(&foreign),
+            foreign_head_before,
+            "foreign worktree HEAD was moved"
+        );
+        let status = git::run_stdout(&foreign, &["status", "--porcelain"], "read status").unwrap();
+        assert!(
+            status.trim().is_empty(),
+            "foreign worktree was modified: {status}"
+        );
+    }
+
+    #[test]
+    fn sync_accepts_a_worktree_owned_by_this_repository() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        init_repo(&project);
+        let head = head_of(&project);
+        let head = head.trim();
+
+        // First call creates the worktree; the second takes the sync path,
+        // which is where the ownership check runs.
+        let created = ensure(&project, "main", head).unwrap();
+        let synced = ensure(&project, "main", head).unwrap();
+
+        assert_eq!(created, synced);
+        assert_eq!(head_of(&synced), head);
+    }
 
     #[test]
     fn path_handles_simple_branch_name() {
