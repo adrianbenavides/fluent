@@ -11,6 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const DEFAULT_RELEASE_REPO: &str = "mrinalwadhwa/fluent";
 const DEFAULT_UPDATE_ENDPOINT: &str = "https://fluent.computer/latest";
 const CHECK_INTERVAL_SECS: u64 = 86400;
+/// Minimum spacing between "newer version available" notices.
+const NUDGE_INTERVAL_SECS: u64 = 86400;
 const CURL_CONNECT_TIMEOUT: u32 = 5;
 const CURL_MAX_TIME_CHECK: u32 = 10;
 const CURL_MAX_TIME_DOWNLOAD: u32 = 300;
@@ -282,6 +284,17 @@ fn atomic_replace(src: &Path, dest: &Path) -> Result<()> {
 struct UpdateCache {
     checked_at: u64,
     latest_version: String,
+    /// When the "newer version available" notice was last printed. Missing in
+    /// caches written by older versions.
+    #[serde(default)]
+    nudged_at: Option<u64>,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs()
 }
 
 fn read_cache() -> Option<UpdateCache> {
@@ -291,27 +304,23 @@ fn read_cache() -> Option<UpdateCache> {
 }
 
 fn write_cache(latest_version: &str) {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let cache = UpdateCache {
-        checked_at: now,
+    write_cache_entry(&UpdateCache {
+        checked_at: now_secs(),
         latest_version: latest_version.to_string(),
-    };
+        nudged_at: None,
+    });
+}
+
+fn write_cache_entry(cache: &UpdateCache) {
     let path = cache_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let _ = fs::write(&path, serde_json::to_string(&cache).unwrap_or_default());
+    let _ = fs::write(&path, serde_json::to_string(cache).unwrap_or_default());
 }
 
 fn cache_is_fresh(cache: &UpdateCache) -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
-    now.saturating_sub(cache.checked_at) < CHECK_INTERVAL_SECS
+    now_secs().saturating_sub(cache.checked_at) < CHECK_INTERVAL_SECS
 }
 
 // -------------------------------------------------------------------------
@@ -325,15 +334,17 @@ pub fn maybe_nudge() {
 
     let current = Version::current();
 
-    if let Some(cache) = read_cache() {
-        if cache_is_fresh(&cache) {
-            if let Some(latest) = Version::parse(&cache.latest_version) {
-                if current.is_behind(&latest) {
-                    print_nudge(&latest);
-                }
-            }
-            return;
+    if let Some(mut cache) = read_cache()
+        && cache_is_fresh(&cache)
+    {
+        if let Some(latest) = Version::parse(&cache.latest_version)
+            && current.is_behind(&latest)
+            && nudge_is_due(&mut cache)
+        {
+            print_nudge(&latest);
+            write_cache_entry(&cache);
         }
+        return;
     }
 
     let release = match query_latest_release() {
@@ -341,11 +352,29 @@ pub fn maybe_nudge() {
         Err(_) => return,
     };
 
-    write_cache(&release.version.to_string());
-
-    if current.is_behind(&release.version) {
+    let mut cache = UpdateCache {
+        checked_at: now_secs(),
+        latest_version: release.version.to_string(),
+        nudged_at: None,
+    };
+    if current.is_behind(&release.version) && nudge_is_due(&mut cache) {
         print_nudge(&release.version);
     }
+    write_cache_entry(&cache);
+}
+
+/// The update notice repeats on every command while the binary is behind, which
+/// turns it into noise. The check stays daily; the notice is shown once a day.
+fn nudge_is_due(cache: &mut UpdateCache) -> bool {
+    let now = now_secs();
+    if cache
+        .nudged_at
+        .is_some_and(|last| now.saturating_sub(last) < NUDGE_INTERVAL_SECS)
+    {
+        return false;
+    }
+    cache.nudged_at = Some(now);
+    true
 }
 
 fn print_nudge(latest: &Version) {
