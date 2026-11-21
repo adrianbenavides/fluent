@@ -138,6 +138,49 @@ pub fn managed_cache_bytes(root: &Path) -> Result<u64> {
     Ok(total)
 }
 
+/// Directory name of the confined OpenCode home Fluent creates inside an
+/// Attempt's artifact area.
+pub const CODER_HOME_DIR: &str = "opencode-home";
+
+/// Sum regular-file lengths below every `opencode-home` directory in `root`.
+///
+/// The coder home holds the agent's own session database, not review output.
+/// Measuring it lets the review-artifact size warning exclude agent state that
+/// the reviewer never produced.
+pub fn coder_home_bytes(root: &Path) -> Result<u64> {
+    let mut total = 0_u64;
+    accumulate_coder_home_bytes(root, &mut total)?;
+    Ok(total)
+}
+
+fn accumulate_coder_home_bytes(root: &Path, total: &mut u64) -> Result<()> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", root.display()));
+        }
+    };
+    for entry in entries {
+        let entry = entry?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_name().to_string_lossy() == CODER_HOME_DIR {
+            *total = total
+                .checked_add(directory_logical_bytes(&path)?)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("coder home size overflow below {}", path.display())
+                })?;
+            continue;
+        }
+        accumulate_coder_home_bytes(&path, total)?;
+    }
+    Ok(())
+}
+
 pub fn toolchain_cache_bytes(root: &Path, toolchain: &Toolchain) -> Result<u64> {
     let mut total = 0_u64;
     for name in toolchain.dirs {
@@ -427,6 +470,32 @@ mod tests {
         std::os::unix::fs::symlink(tmp.path().join("notes"), tmp.path().join("target/link"))
             .unwrap();
         assert_eq!(managed_cache_bytes(tmp.path()).unwrap(), 4);
+    }
+
+    #[test]
+    fn coder_home_bytes_counts_only_the_confined_home() {
+        let tmp = TempDir::new().unwrap();
+        // Mirrors the real layout: an attempt directory, a task directory, and
+        // the coder home beneath it.
+        std::fs::create_dir_all(
+            tmp.path()
+                .join("attempt-1/attempt-1-review-architecture/opencode-home/.local"),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path()
+                .join("attempt-1/attempt-1-review-architecture/opencode-home/.local/opencode.db"),
+            b"1234567890",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path()
+                .join("attempt-1/attempt-1-review-architecture/review.md"),
+            b"report",
+        )
+        .unwrap();
+
+        assert_eq!(coder_home_bytes(tmp.path()).unwrap(), 10);
     }
 
     #[cfg(unix)]

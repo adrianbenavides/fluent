@@ -2331,13 +2331,16 @@ fn record_review_artifact_usage(artifact_dir: &Path, reporter: &dyn Fn(&str)) ->
     }
     let artifact_bytes = prep::logical_bytes(artifact_dir)?;
     let managed_cache_bytes = prep::managed_cache_bytes(artifact_dir)?;
+    // Agent state the coder writes into its confined home is not review
+    // output, so it must not decide whether the artifact looks oversized.
+    let coder_home_bytes = prep::coder_home_bytes(artifact_dir)?;
     let warning = if managed_cache_bytes > 0 {
         Some(format!(
             "review artifact contains {managed_cache_bytes} bytes of managed build cache"
         ))
-    } else if artifact_bytes > REVIEW_ARTIFACT_WARN_BYTES {
+    } else if artifact_bytes.saturating_sub(coder_home_bytes) > REVIEW_ARTIFACT_WARN_BYTES {
         Some(format!(
-            "review artifact exceeds {} bytes",
+            "review artifact exceeds {} bytes (excluding {coder_home_bytes} bytes of coder home)",
             REVIEW_ARTIFACT_WARN_BYTES
         ))
     } else {
